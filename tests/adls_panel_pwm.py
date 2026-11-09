@@ -62,16 +62,18 @@ alignas(8) uint8_t ctl[0x1600]{},port[0x600]{},access[0x80]{},power[0x90]{};
 template<class T>T&field(void*p,unsigned n){return *reinterpret_cast<T*>(static_cast<uint8_t*>(p)+n);}
 static void*owner=ctl;static uint32_t period=120000,control=1U<<29,duty=0,strap=256,wells=1;
 static unsigned get=0,put=0,refs=0,reads=0,writes=0,nativeLight=0,nativeBacklight=0;
+static uint32_t fuse=0x1000000;
 static uint32_t base(void*,uint32_t){return 0;}static void aux(void*){}static void*lookup(uint32_t d){assert(d==0);return port;}
 static void getPG(void*p,uint32_t n){assert(p==power&&n==1);++get;++refs;}static void putPG(void*p,uint32_t n){assert(p==power&&n==1&&refs);++put;--refs;}
-static uint32_t read(void*a,unsigned long reg){assert(a==access&&refs);++reads;switch(reg){case 0x45404:return wells;case 0x42000:return 0x1000000;case 0xc8254:return period;case 0xc8250:return control;case 0xc2014:return strap;default:assert(false);return ~0U;}}
+static uint32_t read(void*a,unsigned long reg){assert(a==access&&refs);++reads;switch(reg){case 0x45404:return wells;case 0x42000:return fuse;case 0xc8254:return period;case 0xc8250:return control;case 0xc2014:return strap;default:assert(false);return ~0U;}}
 void XE::wrapTGLRegisterWrite(void*a,unsigned long reg,uint32_t v){assert(a==access);++writes;
  switch(reg){case 0xc8254:period=v;break;case 0xc8250:control=v;break;case 0xc8258:duty=v;break;default:assert(false);}}
 static uint32_t light(void*c,void*,void*,const void*){assert(c==ctl);++nativeLight;return 0x1234;}
 static uint32_t backlight(void*c,uint32_t){assert(c==ctl);++nativeBacklight;return 0x5678;}
 static void setup(XE&s){
  XE::callbackXE=&s;memset(ctl,0,sizeof(ctl));memset(port,0,sizeof(port));memset(access,0,sizeof(access));memset(power,0,sizeof(power));
- owner=ctl;period=120000;control=1U<<29;duty=0;strap=256;wells=1;get=put=refs=reads=writes=nativeLight=nativeBacklight=0;
+ owner=ctl;period=120000;control=1U<<29;duty=0;strap=256;wells=1;fuse=0x1000000;
+ XELP::panelPWMDonorFallback=XELP::panelPWMBypass=false;get=put=refs=reads=writes=nativeLight=nativeBacklight=0;
  s.tglObservationController=ctl;s.tglTCNativeFunctions={base,aux,aux,getPG,putPG,lookup,&owner,true};
  s.orgTGLRegisterRead=(uintptr_t)read;s.orgTGLRegisterWrite=(uintptr_t)XE::wrapTGLRegisterWrite;
  s.orgADLSLightUpEDP=(uintptr_t)light;s.orgADLSPanelBacklight=(uintptr_t)backlight;
@@ -101,7 +103,12 @@ int main(int argc,char**argv){
   if(bad==14)field<uint32_t>(port,0x550)=3;if(bad==15)s.xeProfile.family=XELP::Family::TigerLake;
   if(bad==12)control=~0U;if(bad==13){period=0;strap=~0U;}
   assert(XE::wrapADLSLightUpEDP(ctl,nullptr,nullptr,nullptr)==kIOReturnNotReady&&nativeLight==0&&writes==0&&get==put&&!refs);
+  assert(XE::wrapADLSPanelBacklight(ctl,32768)==0x5678&&nativeBacklight==1&&writes==0&&get==put&&!refs);
+  assert(XELP::panelPWMDonorFallback&&!XELP::panelPWMBypass);
  }
+ {XE s;setup(s);fuse=0;
+  assert(XE::wrapADLSPanelBacklight(ctl,32768)==0x5678&&nativeBacklight==1&&writes==0&&get==put&&!refs);
+  assert(XELP::panelPWMDonorFallback);}
  XE s;setup(s);assert(XE::wrapADLSLightUpEDP(ctl,nullptr,nullptr,nullptr)==0x1234&&nativeLight==1&&field<uint32_t>(ctl,0xe60)==120000);
  assert(get==put&&get==1&&!refs);const auto capturedReads=reads;
  for(unsigned v:{0U,1U,32768U,65535U}){assert(!XE::wrapADLSPanelBacklight(ctl,v));assert(duty==uint64_t(120000)*v/65535&&field<uint32_t>(ctl,0xe58)==v&&get==put&&!refs);}
